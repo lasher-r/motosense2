@@ -10,32 +10,61 @@
  *
 */
 
+#include <SPI.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+#define SCREEN_WIDTH 128 // OLED display width, in pixels
+#define SCREEN_HEIGHT 32 // OLED display height, in pixels
+
+#define OLED_RESET     4 // Reset pin # (or -1 if sharing Arduino reset pin)
+#define SCREEN_ADDRESS 0x3C ///< See datasheet for Address; 0x3D for 128x64, 0x3C for 128x32
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
 //calculations
 //tire radius ~ 13.5 inches
 //circumference = pi*2*r =~85 inches
 //max speed of 35mph =~ 616inches/second
 //max rps =~7.25
 
-#define reed 12 //pin connected to read switch
-const int ledPin =  13;      // the number of the LED pin
+const int reed = 2; 
+const int ledPin =  13;      // the number of the board LED pin
+const int interruptPin = 3;
 
 //storage variables
-// int reedVal;
-long durOfRotationMs; // time between one full rotation (in ms)
-float mph;
+ // time between one full rotation (in ms)
 float radius = 13.5; // tire radius (in inches)
 float circumference;
-
-bool lastWasHigh;
 int minDurRotationMs = 100; //min time (in ms) of one rotation (for debouncing)
 int maxStandingTime = 2000;
 
+long durOfRotationMs;
+float inches;
+float mph;
+bool lastWasHigh;
 
 void setup(){
+  if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
+    Serial.println(F("SSD1306 allocation failed"));
+    for(;;); // Don't proceed, loop forever
+  }
+
+  // Show initial display buffer contents on the screen --
+  // the library initializes this with an Adafruit splash screen.
+  display.display();
+  delay(500); // Pause for 2 seconds
+
+  // Clear the buffer
+  display.clearDisplay();
   
+  lastWasHigh = true;
   circumference = 2*3.14*radius;
+  inches = 0.0;
+  
   pinMode(reed, INPUT);
   pinMode(ledPin, OUTPUT);
+  attachInterrupt(digitalPinToInterrupt(interruptPin), resetOdo, RISING);
 
   
   // TIMER SETUP- the timer interrupt allows precise timed measurements of the reed switch
@@ -64,41 +93,71 @@ void setup(){
   Serial.begin(9600);
 }
 
+void displayOled() {
+  display.clearDisplay();
 
-ISR(TIMER1_COMPA_vect) {//Interrupt at freq of 1kHz to measure reed switch
-  //Might be worth getting pin value directly
-  //      See: https://www.arduino.cc/en/Reference/PortManipulation
+  display.setTextSize(2);             
+  display.setTextColor(SSD1306_WHITE);        // Draw white text
+  display.setCursor(0,0);             // Start at top-left corner
+  display.print(F("MPH: "));
+  display.println(mph);
+  display.print(F("ODO: "));
+  display.println(inches / 5280);
+  display.display();
+}
+
+void resetOdo() {
+  inches = 0.0;
+}
+
+/**
+ * Interrupt at freq of 1kHz to measure reed switch
+ * 
+ * Might be worth getting pin value directly
+ * See: https://www.arduino.cc/en/Reference/PortManipulation
+ * 
+ * if reed switch is closed 
+ * and enough time has passed that we're sure it's a new rotation
+ * and we're not stuck at the mag/moving at exactly 1kHz,
+ * calculate mph and add to odometer,
+ * reset the time it takes for the wheel to turn,
+ * 
+ * 
+ * if the time this rotation is taking > the maxStandingTime,
+ * the wheel is stoped.  set mph to 0
+ * 
+ * save the value of the reed switch in lastWasHigh
+ * Add one ms to the time this rotation is taking.
+ * 
+ */
+ISR(TIMER1_COMPA_vect) {
   bool reedValue = digitalRead(reed);
   digitalWrite(ledPin, reedValue);
 
-  // if reed switch is closed 
-  //  and enough time has passed that we're sure it's a new rotation
-  //  and we're not stuck at the mag/moving at exactly 1kHz    
   if (reedValue && durOfRotationMs > minDurRotationMs && !lastWasHigh){
-    //calculate miles per hour
-    //TODO: check math
+
     mph = (56.8*float(circumference))/float(durOfRotationMs);
-    //reset counter
+    inches += float(circumference);
     durOfRotationMs = 0;
   }
 
-  lastWasHigh = reedValue;
-
   if (durOfRotationMs > maxStandingTime){
-    //if no new pulses from reed switch- tire is still, set mph to 0
     mph = 0;
   }
 
-  // add another ms to counter
+  lastWasHigh = reedValue;
   durOfRotationMs += 1; 
 }
 
-void displayMPH(){
-  Serial.println(mph);
+void displaySerial(){
+  Serial.print("mph: ");
+  Serial.print(mph);
+  Serial.print(" miles: ");
+  Serial.println(inches / 5280);
 }
 
 void loop(){
   //print mph once a second
-  displayMPH();
-  delay(1000);
+  displayOled();
+  delay(500);
 }
